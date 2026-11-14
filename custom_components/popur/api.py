@@ -28,6 +28,7 @@ class PopurApi:
         self.token = None
         self.user_id = None
         self.home_id = None
+        self._push = None
 
     def login(self):
         """Login to Popur Cloud"""
@@ -91,6 +92,55 @@ class PopurApi:
             _LOGGER.error(f"Status fetch error: {e}")
             return None
 
+    def start_push(self, device_ids, callback):
+        """Open the persistent MQTT connection. callback(topic, payload) runs in the paho thread."""
+        if not self.token: self.login()
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, transport="websockets")
+        def use_token():
+            client.ws_set_options(path=f"/mqtt?token={self.token}", headers={"Sec-WebSocket-Protocol": "mqtt"})
+
+        use_token()
+        client.tls_set_context(context=ssl.create_default_context())
+        client.reconnect_delay_set(min_delay=1, max_delay=120)
+
+        def on_connect(client, userdata, flags, reason_code, properties):
+            if reason_code.is_failure:
+                _LOGGER.warning(f"Popur MQTT connect refused: {reason_code}")
+                return
+            for device_id in device_ids:
+                client.subscribe(f"+/+/{device_id}")
+
+        def renew_token():
+            if self.login():
+                use_token()
+
+        def on_disconnect(client, userdata, flags, reason_code, properties):
+            if reason_code.is_failure:
+                renew_token()
+
+        def on_connect_fail(client, userdata):
+            renew_token()
+
+        def on_message(client, userdata, msg):
+            try:
+                callback(msg.topic, json.loads(msg.payload))
+            except ValueError:
+                pass
+
+        client.on_connect = on_connect
+        client.on_disconnect = on_disconnect
+        client.on_connect_fail = on_connect_fail
+        client.on_message = on_message
+        client.connect_async("cloud.popur.com.cn", 443, keepalive=30)
+        client.loop_start()
+        self._push = client
+
+    def stop_push(self):
+        client, self._push = self._push, None
+        if client:
+            client.disconnect()
+            client.loop_stop()
+
     def send_command(self, device_id, cmd_type, value=None):
         """Send MQTT Command"""
         if not self.token: self.login()
@@ -107,6 +157,11 @@ class PopurApi:
             topic = f"devcrpc/attr/{device_id}"
             val = 1 if value else 0
             payload = {"id": int(time.time()), "method": "set_properties", "from": "remote", "params": [{"did": "0", "pid": 3, "sid": 2, "value": val}]}
+
+        push = self._push
+        if push and push.is_connected():
+            if push.publish(topic, json.dumps(payload)).rc == mqtt.MQTT_ERR_SUCCESS:
+                return
 
         try:
             client = mqtt.Client(transport="websockets")

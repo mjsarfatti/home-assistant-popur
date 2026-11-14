@@ -1,8 +1,14 @@
+import logging
+
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from .const import DOMAIN, CONF_EMAIL, CONF_PASSWORD
 from .api import PopurApi
 from .coordinator import PopurCoordinator
+from .push import apply_message
+
+_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor", "binary_sensor", "switch", "button"]
 
@@ -16,7 +22,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     
     hass.data[DOMAIN][entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    def apply_push(topic, payload):
+        data = {devid: dict(state) for devid, state in coordinator.data.items()}
+        changed = apply_message(data, topic, payload)
+        if changed:
+            if coordinator.push_overlay is not None:
+                coordinator.push_overlay.setdefault(topic.rsplit("/", 1)[1], {}).update(changed)
+            coordinator.async_set_updated_data(data)
+
+    try:
+        await hass.async_add_executor_job(
+            api.start_push,
+            list(coordinator.data),
+            lambda topic, payload: hass.loop.call_soon_threadsafe(apply_push, topic, payload),
+        )
+    except Exception as err:
+        _LOGGER.warning("Popur MQTT push not started, polling only: %s", err)
+    else:
+        async def stop_push(event):
+            await hass.async_add_executor_job(api.stop_push)
+
+        entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, stop_push))
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        await hass.async_add_executor_job(hass.data[DOMAIN].pop(entry.entry_id).api.stop_push)
+    return unloaded
