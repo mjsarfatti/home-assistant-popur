@@ -94,6 +94,7 @@ class PopurApi:
 
     def start_push(self, device_ids, callback):
         """Open the persistent MQTT connection. callback(topic, payload) runs in the paho thread."""
+        if not device_ids: return
         if not self.token: self.login()
         client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, transport="websockets")
         def use_token():
@@ -124,7 +125,8 @@ class PopurApi:
         def on_message(client, userdata, msg):
             try:
                 callback(msg.topic, json.loads(msg.payload))
-            except ValueError:
+            # RuntimeError: the event loop is closed during shutdown.
+            except (ValueError, RuntimeError):
                 pass
 
         client.on_connect = on_connect
@@ -136,6 +138,7 @@ class PopurApi:
         self._push = client
 
     def stop_push(self):
+        """Close the MQTT connection and wait for the paho thread. Safe to call two times."""
         client, self._push = self._push, None
         if client:
             client.disconnect()
