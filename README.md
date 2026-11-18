@@ -22,6 +22,14 @@ Since Popur does not provide a local API, this integration communicates with the
 *   **Sensors:**
     *   **Bin Full:** Binary sensor indicating when the waste bin needs emptying.
     *   **Cycles:** Tracks the number of daily cleaning cycles (Recommendation: Use Home Assistant 'Utility Meter' Helpers to track daily usage locally, as the device's internal counters may reset based on China Standard Time.) 
+    *   **Cycles Since Bin Emptied:** Counter that resets when the bin is emptied.
+    *   **Status:** Idle, cleaning or presence (a cat or a hand in the box). Push only.
+    *   **Presence:** Occupancy binary sensor from the status. Push only.
+*   **Settings:** Curious Cat, Do Not Disturb (on/off, start, end), Scheduled Clean (on/off), Wait Time, Leveling Passes, Display mode.
+*   **Reboot** button.
+*   **Cleaning Done** event, with visit start and duration, cycle start and duration, and trigger (automatic, side button, app). Push only.
+*   **Firmware version** in the device info. Push only.
+*   All entities are unavailable while the device is offline.
 *   **Easy Setup:** Fully configurable via the Home Assistant UI (Config Flow). No YAML editing required for connection.
 
 ## 📥 Installation

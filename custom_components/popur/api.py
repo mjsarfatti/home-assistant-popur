@@ -127,7 +127,15 @@ class PopurApi:
                 "cycles": data.get('worknum', 0),
                 "total_cycles": data.get('lastworknum', 0),
                 "manual_mode": True if str(data.get('manualmode')) == "1" else False,
-                "online": True if str(data.get('isonline')) == "1" else False
+                "online": True if str(data.get('isonline')) == "1" else False,
+                "curious_cat": data.get('sound') == 1,
+                "dnd": data.get('sleepmode') == 1,
+                "scheduled_clean": data.get('regularcleanmode') == 1,
+                "wait_time": data.get('counttime'),
+                "leveling": data.get('cleanmode'),
+                "display": data.get('skinstate'),
+                "dnd_start": data.get('sleepstarttime'),
+                "dnd_end": data.get('sleependtime'),
             }
         except Exception as e:
             _LOGGER.error(f"Status fetch error: {e}")
@@ -158,6 +166,11 @@ class PopurApi:
                 return
             for device_id in device_ids:
                 client.subscribe(f"+/+/{device_id}")
+            for device_id in device_ids:
+                # HTTP has no field for pid 2. Never read sid 1; keep the app's 5-pid batch (PROTOCOL.md 1.4, 2.4).
+                client.publish(f"devcrpc/attr/{device_id}", json.dumps({"id": next(self._ids), "method": "get_properties", "from": "remote",
+                    "params": [{"did": "0", "sid": 2, "pid": pid} for pid in (1, 2, 8, 11, 6)]}))
+                client.publish(f"devcrpc/info/{device_id}", json.dumps({"id": next(self._ids), "method": "aithingsIO.info", "from": "remote", "params": {}}))
             if on_connected:
                 on_connected()
 
@@ -208,9 +221,9 @@ class PopurApi:
 
     def _handle_reply(self, topic, payload):
         """Record the result of a pending command. Runs in the paho thread."""
-        if not isinstance(payload, dict) or not topic.startswith(("devsrpc/action/", "devsrpc/attr/")):
+        if not isinstance(payload, dict) or not topic.startswith(("devsrpc/action/", "devsrpc/attr/", "devsrpc/event/")):
             return
-        if payload.get("method") not in ("action", "set_properties"):
+        if payload.get("method") not in ("action", "set_properties", "aithingsIO.reboot"):
             return
         with self._pending_lock:
             pending = self._pending.get(payload.get("id"))
@@ -231,6 +244,13 @@ class PopurApi:
         elif cmd_type == "manual_mode":
             topic = f"devcrpc/attr/{device_id}"
             payload = {"id": msg_id, "method": "set_properties", "from": "remote", "params": [{"did": "0", "pid": 3, "sid": 2, "value": 1 if value else 0}]}
+        elif cmd_type == "set_property":
+            pid, value = value
+            topic = f"devcrpc/attr/{device_id}"
+            payload = {"id": msg_id, "method": "set_properties", "from": "remote", "params": [{"did": "0", "pid": pid, "sid": 2, "value": value}]}
+        elif cmd_type == "reboot":
+            topic = f"devcrpc/event/{device_id}"
+            payload = {"id": msg_id, "method": "aithingsIO.reboot", "from": "remote", "params": [{"did": "0"}]}
         else:
             raise ValueError(f"Unknown command: {cmd_type}")
 
@@ -257,3 +277,7 @@ class PopurApi:
         if pending["code"] not in (0, None):
             raise PopurCommandError(f"The device rejected the {cmd_type} command (code {pending['code']}).")
         _LOGGER.debug(f"Popur: {cmd_type} command id {msg_id} confirmed")
+
+    def set_property(self, device_id, pid, value):
+        """Write one sid 2 property and wait for the device's reply. Raises PopurCommandError."""
+        self.send_command(device_id, "set_property", (pid, value))

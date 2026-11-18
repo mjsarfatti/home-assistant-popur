@@ -18,3 +18,7 @@ class PopurEntity(CoordinatorEntity):
             "model": "X5",
             "sw_version": "1.0",
         }
+
+    @property
+    def available(self):
+        return super().available and bool(self.coordinator.data.get(self._device_id, {}).get("online"))
