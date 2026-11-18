@@ -43,10 +43,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     def update_firmware(devid, fw_ver):
         # entity.py hard-codes sw_version; the device registry keeps the real value.
-        registry = dr.async_get(hass)
-        device = registry.async_get_device(identifiers={(DOMAIN, devid)})
-        if device is not None and device.sw_version != fw_ver:
-            registry.async_update_device(device.id, sw_version=fw_ver)
+        dr.async_get(hass).async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, devid)}, sw_version=fw_ver)
 
     def set_push_state(connected):
         # Push up: poll slowly as a safety net. Push down: poll fast again.
