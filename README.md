@@ -31,6 +31,7 @@ Since Popur does not provide a local API, this integration communicates with the
 *   **Firmware version** in the device info. Push only.
 *   All entities are unavailable while the device is offline.
 *   **Easy Setup:** Fully configurable via the Home Assistant UI (Config Flow). No YAML editing required for connection.
+*   **Icon** in the Home Assistant integration list (Home Assistant 2026.3 or later).
 
 ## 📥 Installation
 
@@ -62,7 +63,9 @@ Since Popur does not provide a local API, this integration communicates with the
 
 ## 🌙 Night Mode (Do Not Disturb) Automation
 
-To prevent the robot from cycling at night, you can use the "Manual Mode" switch. We recommend using a **Schedule Helper** combined with an automation.
+The device has its own Do Not Disturb setting. Use the **Do Not Disturb** switch and the **Do Not Disturb Start** and **Do Not Disturb End** times to set it.
+
+As an alternative, to prevent the robot from cycling at night, you can use the "Manual Mode" switch. We recommend using a **Schedule Helper** combined with an automation.
 
 ### 1. Create a Schedule
 Go to **Settings** > **Devices & Services** > **Helpers** > **Create Helper** > **Schedule**.
