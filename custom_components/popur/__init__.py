@@ -3,7 +3,7 @@ import logging
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
-from .const import DOMAIN, CONF_EMAIL, CONF_PASSWORD
+from .const import DOMAIN, CONF_EMAIL, CONF_PASSWORD, PUSH_UPDATE_INTERVAL, UPDATE_INTERVAL
 from .api import PopurApi
 from .coordinator import PopurCoordinator
 from .push import apply_message
@@ -31,11 +31,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 coordinator.push_overlay.setdefault(topic.rsplit("/", 1)[1], {}).update(changed)
             coordinator.async_set_updated_data(data)
 
+    def set_push_state(connected):
+        # Push up: poll slowly as a safety net. Push down: poll fast again.
+        # Refresh now in both cases: after a reconnect the push may have missed messages.
+        coordinator.update_interval = PUSH_UPDATE_INTERVAL if connected else UPDATE_INTERVAL
+        hass.async_create_task(coordinator.async_request_refresh())
+
+    def from_paho_thread(func, *args):
+        try:
+            hass.loop.call_soon_threadsafe(func, *args)
+        except RuntimeError:
+            pass  # The event loop is closed during shutdown.
+
     try:
         await hass.async_add_executor_job(
             api.start_push,
             list(coordinator.data),
-            lambda topic, payload: hass.loop.call_soon_threadsafe(apply_push, topic, payload),
+            lambda topic, payload: from_paho_thread(apply_push, topic, payload),
+            lambda: from_paho_thread(set_push_state, True),
+            lambda: from_paho_thread(set_push_state, False),
         )
     except Exception as err:
         _LOGGER.warning("Popur MQTT push not started, polling only: %s", err)

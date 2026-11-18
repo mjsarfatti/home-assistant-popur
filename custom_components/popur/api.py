@@ -5,8 +5,15 @@ import time
 import paho.mqtt.client as mqtt
 import ssl
 import logging
+import threading
 
 _LOGGER = logging.getLogger(__name__)
+
+# MQTT CONNACK reason codes for a rejected token: "Bad user name or password", "Not authorized".
+_AUTH_REFUSED = (134, 135)
+# Minimum seconds between two logins started by the MQTT reconnect logic.
+_RELOGIN_AFTER_AUTH_REFUSED = 60
+_RELOGIN_AFTER_OTHER_FAILURE = 15 * 60
 
 class PopurApi:
     def __init__(self, email, password):
@@ -29,9 +36,15 @@ class PopurApi:
         self.user_id = None
         self.home_id = None
         self._push = None
+        self._login_lock = threading.Lock()
+        self._last_relogin = None
 
     def login(self):
-        """Login to Popur Cloud"""
+        """Login to Popur Cloud. Thread-safe: the poll, commands and the MQTT thread can call it."""
+        with self._login_lock:
+            return self._login()
+
+    def _login(self):
         url = "https://cloud.popur.com.cn/uapi/auth"
         headers = {"Content-Type": "application/json", "User-Agent": "com.cloudapp.popur.app"}
         payload = {"param": self.email, "password": self.password_hash, "type": "2"}
@@ -92,8 +105,13 @@ class PopurApi:
             _LOGGER.error(f"Status fetch error: {e}")
             return None
 
-    def start_push(self, device_ids, callback):
-        """Open the persistent MQTT connection. callback(topic, payload) runs in the paho thread."""
+    def start_push(self, device_ids, callback, on_connected=None, on_disconnected=None):
+        """Open the persistent MQTT connection.
+
+        callback(topic, payload), on_connected() and on_disconnected() run in the paho thread.
+        on_connected runs after each successful connect. on_disconnected runs after each
+        unexpected disconnect.
+        """
         if not device_ids: return
         if not self.token: self.login()
         client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, transport="websockets")
@@ -107,20 +125,34 @@ class PopurApi:
         def on_connect(client, userdata, flags, reason_code, properties):
             if reason_code.is_failure:
                 _LOGGER.warning(f"Popur MQTT connect refused: {reason_code}")
+                if reason_code.value in _AUTH_REFUSED:
+                    renew_token(_RELOGIN_AFTER_AUTH_REFUSED)
                 return
             for device_id in device_ids:
                 client.subscribe(f"+/+/{device_id}")
+            if on_connected:
+                on_connected()
 
-        def renew_token():
+        def renew_token(min_interval):
+            # Each login issues a new token. Do not log in on every reconnect try.
+            now = time.monotonic()
+            if self._last_relogin is not None and now - self._last_relogin < min_interval:
+                return
+            self._last_relogin = now
             if self.login():
                 use_token()
 
         def on_disconnect(client, userdata, flags, reason_code, properties):
-            if reason_code.is_failure:
-                renew_token()
+            if not reason_code.is_failure:
+                return  # stop_push() closed the connection.
+            if reason_code.value in _AUTH_REFUSED:
+                renew_token(_RELOGIN_AFTER_AUTH_REFUSED)
+            if on_disconnected:
+                on_disconnected()
 
         def on_connect_fail(client, userdata):
-            renew_token()
+            # The cause is unknown here (network down or token rejected at the WebSocket handshake).
+            renew_token(_RELOGIN_AFTER_OTHER_FAILURE)
 
         def on_message(client, userdata, msg):
             try:
