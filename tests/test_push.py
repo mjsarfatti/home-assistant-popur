@@ -90,7 +90,6 @@ def test_new_pid_mapping():
         (15, "07:30", {"dnd_end": "07:30"}),
         (17, 4, {"display": 4}),
         (18, 15, {"wait_time": 15}),
-        (19, 1, {"scheduled_clean": True}),
     ]:
         state = make_state()
         assert push.apply_message(state, ATTR, attr({"sid": 2, "pid": pid, "value": value})) == expected

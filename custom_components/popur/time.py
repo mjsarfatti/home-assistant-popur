@@ -44,4 +44,3 @@ class PopurSettingTime(PopurEntity, TimeEntity):
             await self.hass.async_add_executor_job(self.coordinator.api.set_property, self._device_id, self._pid, value.strftime("%H:%M"))
         except PopurCommandError as err:
             raise HomeAssistantError(str(err)) from err
-        await self.coordinator.async_request_refresh()

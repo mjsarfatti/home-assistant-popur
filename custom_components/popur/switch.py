@@ -14,7 +14,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
         entities.extend([
             PopurSettingSwitch(coordinator, device_static_info, "curious_cat", 4, "Curious Cat", "mdi:cat"),
             PopurSettingSwitch(coordinator, device_static_info, "dnd", 13, "Do Not Disturb", "mdi:sleep"),
-            PopurSettingSwitch(coordinator, device_static_info, "scheduled_clean", 19, "Scheduled Clean", "mdi:calendar-clock"),
         ])
     async_add_entities(entities)
 
@@ -67,4 +66,3 @@ class PopurSettingSwitch(PopurEntity, SwitchEntity):
             await self.hass.async_add_executor_job(self.coordinator.api.set_property, self._device_id, self._pid, value)
         except PopurCommandError as err:
             raise HomeAssistantError(str(err)) from err
-        await self.coordinator.async_request_refresh()

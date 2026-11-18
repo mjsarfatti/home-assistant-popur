@@ -18,6 +18,8 @@ _RELOGIN_AFTER_AUTH_REFUSED = 60
 _RELOGIN_AFTER_OTHER_FAILURE = 15 * 60
 # Seconds to wait for the device's reply to a command.
 COMMAND_TIMEOUT = 5
+# Minimum seconds between two commands. A burst of commands makes the device stop answering and go offline.
+COMMAND_GAP = 1
 # False: a missing reply only logs a warning. Set to True when live tests show that the
 # device replies to our own action and set_properties commands.
 REQUIRE_COMMAND_REPLY = False
@@ -66,6 +68,9 @@ class PopurApi:
         self._ids = itertools.count(random.randint(100_000, 900_000))
         self._pending = {}
         self._pending_lock = threading.Lock()
+        self._command_lock = threading.RLock()
+        self._last_command = 0.0
+        self._latest_write = {}
 
     def login(self):
         """Login to Popur Cloud. Thread-safe: the poll, commands and the MQTT thread can call it."""
@@ -130,7 +135,6 @@ class PopurApi:
                 "online": True if str(data.get('isonline')) == "1" else False,
                 "curious_cat": data.get('sound') == 1,
                 "dnd": data.get('sleepmode') == 1,
-                "scheduled_clean": data.get('regularcleanmode') == 1,
                 "wait_time": data.get('counttime'),
                 "leveling": data.get('cleanmode'),
                 "display": data.get('skinstate'),
@@ -232,6 +236,15 @@ class PopurApi:
             pending["event"].set()
 
     def send_command(self, device_id, cmd_type, value=None):
+        """Send one command at a time, at least COMMAND_GAP s apart. See _send_command."""
+        with self._command_lock:
+            time.sleep(max(0, self._last_command + COMMAND_GAP - time.monotonic()))
+            try:
+                return self._send_command(device_id, cmd_type, value)
+            finally:
+                self._last_command = time.monotonic()
+
+    def _send_command(self, device_id, cmd_type, value=None):
         """Send a command on the push connection and wait for the device's reply.
 
         Raises PopurCommandError when push is not connected, the publish fails, or the
@@ -279,5 +292,13 @@ class PopurApi:
         _LOGGER.debug(f"Popur: {cmd_type} command id {msg_id} confirmed")
 
     def set_property(self, device_id, pid, value):
-        """Write one sid 2 property and wait for the device's reply. Raises PopurCommandError."""
-        self.send_command(device_id, "set_property", (pid, value))
+        """Write one sid 2 property and wait for the device's reply. Raises PopurCommandError.
+
+        A write that a newer write of the same property replaces while it waits in the queue is not sent.
+        """
+        key, token = (device_id, pid), object()
+        self._latest_write[key] = token
+        with self._command_lock:
+            if self._latest_write.get(key) is not token:
+                return
+            self.send_command(device_id, "set_property", (pid, value))

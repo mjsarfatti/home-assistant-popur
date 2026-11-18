@@ -25,7 +25,7 @@ Since Popur does not provide a local API, this integration communicates with the
     *   **Cycles Since Bin Emptied:** Counter that resets when the bin is emptied.
     *   **Status:** Idle, cleaning or presence (a cat or a hand in the box). Push only.
     *   **Presence:** Occupancy binary sensor from the status. Push only.
-*   **Settings:** Curious Cat, Do Not Disturb (on/off, start, end), Scheduled Clean (on/off), Wait Time, Leveling Passes, Display mode.
+*   **Settings:** Curious Cat, Do Not Disturb (on/off, start, end), Wait Time (2–30 minutes), Leveling Passes (2–5), Display mode. The integration sends one command at a time, at least 1 s apart.
 *   **Reboot** button.
 *   **Cleaning Done** event, with visit start and duration, cycle start and duration, and trigger (automatic, side button, app). Push only.
 *   **Firmware version** in the device info. Push only.

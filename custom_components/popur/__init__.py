@@ -12,7 +12,7 @@ from .push import apply_message, parse_cycle_done, parse_firmware
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor", "binary_sensor", "switch", "button", "number", "select", "time", "event"]
+PLATFORMS = ["sensor", "binary_sensor", "switch", "button", "select", "time", "event"]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     hass.data.setdefault(DOMAIN, {})

@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -31,6 +33,7 @@ class FakePush:
 
 def make_api(monkeypatch, **kwargs):
     monkeypatch.setattr(api_mod, "COMMAND_TIMEOUT", 0.05)
+    monkeypatch.setattr(api_mod, "COMMAND_GAP", 0)
     api = api_mod.PopurApi("a@b.c", "pw")
     api._push = FakePush(api, **kwargs)
     return api
@@ -160,3 +163,42 @@ def test_event_occured_is_not_a_reply(monkeypatch, caplog):
     api = make_api(monkeypatch, reply=event)
     api.send_command("dev1", "reboot")
     assert "no reply" in caplog.text
+
+
+def test_commands_keep_a_minimum_gap(monkeypatch):
+    api = make_api(monkeypatch, reply=set_reply(0))
+    monkeypatch.setattr(api_mod, "COMMAND_GAP", 0.2)
+    times = []
+    publish = api._push.publish
+    api._push.publish = lambda topic, data: (times.append(time.monotonic()), publish(topic, data))[1]
+    api.set_property("dev1", 4, 1)
+    api.set_property("dev1", 13, 1)
+    assert times[1] - times[0] >= 0.19
+
+
+def test_replaced_write_is_not_sent(monkeypatch):
+    api = make_api(monkeypatch, reply=set_reply(0))
+    started, release = threading.Event(), threading.Event()
+    publish = api._push.publish
+
+    def slow_publish(topic, data):
+        started.set()
+        release.wait(1)
+        return publish(topic, data)
+
+    api._push.publish = slow_publish
+    first = threading.Thread(target=api.set_property, args=("dev1", 4, 1))
+    first.start()
+    started.wait(1)
+    # Two writes of pid 18 queue behind the first command: only the newest one is sent.
+    second = threading.Thread(target=api.set_property, args=("dev1", 18, 3))
+    second.start()
+    time.sleep(0.05)
+    third = threading.Thread(target=api.set_property, args=("dev1", 18, 7))
+    third.start()
+    time.sleep(0.05)
+    release.set()
+    for t in (first, second, third):
+        t.join(2)
+    values = [(m["params"][0]["pid"], m["params"][0]["value"]) for _, m in api._push.sent]
+    assert values == [(4, 1), (18, 7)]

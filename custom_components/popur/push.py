@@ -21,7 +21,6 @@ _ATTR_PIDS = {
     15: ("dnd_end", _time),
     17: ("display", lambda v: v if type(v) is int and 1 <= v <= 5 else None),
     18: ("wait_time", lambda v: v if isinstance(v, int) and not isinstance(v, bool) else None),
-    19: ("scheduled_clean", lambda v: v == 1),
 }
 
 
