@@ -4,7 +4,9 @@ import requests
 import time
 import paho.mqtt.client as mqtt
 import ssl
+import itertools
 import logging
+import random
 import threading
 
 _LOGGER = logging.getLogger(__name__)
@@ -14,6 +16,28 @@ _AUTH_REFUSED = (134, 135)
 # Minimum seconds between two logins started by the MQTT reconnect logic.
 _RELOGIN_AFTER_AUTH_REFUSED = 60
 _RELOGIN_AFTER_OTHER_FAILURE = 15 * 60
+# Seconds to wait for the device's reply to a command.
+COMMAND_TIMEOUT = 5
+# False: a missing reply only logs a warning. Set to True when live tests show that the
+# device replies to our own action and set_properties commands.
+REQUIRE_COMMAND_REPLY = False
+
+
+class PopurCommandError(Exception):
+    """The command was not sent, or the device rejected it."""
+
+
+def _reply_code(payload):
+    """Return the result code of an action or set_properties reply, or None if it has none."""
+    params = payload.get("params")
+    if isinstance(params, dict):
+        params = [params]
+    if isinstance(params, list):
+        codes = [e.get("code") for e in params if isinstance(e, dict) and "code" in e]
+        if codes:
+            return next((c for c in codes if c != 0), 0)
+    return payload.get("code")
+
 
 class PopurApi:
     def __init__(self, email, password):
@@ -38,6 +62,10 @@ class PopurApi:
         self._push = None
         self._login_lock = threading.Lock()
         self._last_relogin = None
+        # The app uses small ids (2, 3, 4...). Start far above them so that replies do not mix.
+        self._ids = itertools.count(random.randint(100_000, 900_000))
+        self._pending = {}
+        self._pending_lock = threading.Lock()
 
     def login(self):
         """Login to Popur Cloud. Thread-safe: the poll, commands and the MQTT thread can call it."""
@@ -156,7 +184,9 @@ class PopurApi:
 
         def on_message(client, userdata, msg):
             try:
-                callback(msg.topic, json.loads(msg.payload))
+                payload = json.loads(msg.payload)
+                self._handle_reply(msg.topic, payload)
+                callback(msg.topic, payload)
             # RuntimeError: the event loop is closed during shutdown.
             except (ValueError, RuntimeError):
                 pass
@@ -176,35 +206,54 @@ class PopurApi:
             client.disconnect()
             client.loop_stop()
 
-    def send_command(self, device_id, cmd_type, value=None):
-        """Send MQTT Command"""
-        if not self.token: self.login()
-        path = f"/mqtt?token={self.token}"
-        broker = "cloud.popur.com.cn"
-        
-        payload = {}
-        topic = ""
+    def _handle_reply(self, topic, payload):
+        """Record the result of a pending command. Runs in the paho thread."""
+        if not isinstance(payload, dict) or not topic.startswith(("devsrpc/action/", "devsrpc/attr/")):
+            return
+        if payload.get("method") not in ("action", "set_properties"):
+            return
+        with self._pending_lock:
+            pending = self._pending.get(payload.get("id"))
+        if pending is not None:
+            pending["code"] = _reply_code(payload)
+            pending["event"].set()
 
+    def send_command(self, device_id, cmd_type, value=None):
+        """Send a command on the push connection and wait for the device's reply.
+
+        Raises PopurCommandError when push is not connected, the publish fails, or the
+        device replies with an error code.
+        """
+        msg_id = next(self._ids)
         if cmd_type == "clean":
             topic = f"devcrpc/action/{device_id}"
-            payload = {"id": int(time.time()), "method": "action", "from": "remote", "params": {"did": "0", "sid": 2, "aid": 1, "in": []}}
+            payload = {"id": msg_id, "method": "action", "from": "remote", "params": {"did": "0", "sid": 2, "aid": 1, "in": []}}
         elif cmd_type == "manual_mode":
             topic = f"devcrpc/attr/{device_id}"
-            val = 1 if value else 0
-            payload = {"id": int(time.time()), "method": "set_properties", "from": "remote", "params": [{"did": "0", "pid": 3, "sid": 2, "value": val}]}
+            payload = {"id": msg_id, "method": "set_properties", "from": "remote", "params": [{"did": "0", "pid": 3, "sid": 2, "value": 1 if value else 0}]}
+        else:
+            raise ValueError(f"Unknown command: {cmd_type}")
 
         push = self._push
-        if push and push.is_connected():
-            if push.publish(topic, json.dumps(payload)).rc == mqtt.MQTT_ERR_SUCCESS:
-                return
+        if not push or not push.is_connected():
+            raise PopurCommandError("Not connected to the Popur cloud. Try again in a minute.")
 
+        pending = {"event": threading.Event(), "code": None}
+        with self._pending_lock:
+            self._pending[msg_id] = pending
         try:
-            client = mqtt.Client(transport="websockets")
-            client.ws_set_options(path=path, headers={"Sec-WebSocket-Protocol": "mqtt"})
-            client.tls_set_context(context=ssl.create_default_context())
-            client.connect(broker, 443, 60)
-            client.publish(topic, json.dumps(payload))
-            time.sleep(0.5) 
-            client.disconnect()
-        except Exception as e:
-            _LOGGER.error(f"MQTT Error: {e}")
+            if push.publish(topic, json.dumps(payload)).rc != mqtt.MQTT_ERR_SUCCESS:
+                raise PopurCommandError("Could not send the command to the Popur cloud.")
+            replied = pending["event"].wait(COMMAND_TIMEOUT)
+        finally:
+            with self._pending_lock:
+                self._pending.pop(msg_id, None)
+
+        if not replied:
+            if REQUIRE_COMMAND_REPLY:
+                raise PopurCommandError(f"The device did not answer the {cmd_type} command.")
+            _LOGGER.warning(f"Popur: no reply to {cmd_type} command id {msg_id} within {COMMAND_TIMEOUT} s")
+            return
+        if pending["code"] not in (0, None):
+            raise PopurCommandError(f"The device rejected the {cmd_type} command (code {pending['code']}).")
+        _LOGGER.debug(f"Popur: {cmd_type} command id {msg_id} confirmed")
