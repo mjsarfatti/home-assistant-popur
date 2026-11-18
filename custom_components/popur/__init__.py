@@ -42,7 +42,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             coordinator.async_set_updated_data(data)
 
     def update_firmware(devid, fw_ver):
-        # entity.py hard-codes sw_version; the device registry keeps the real value.
+        # The firmware version comes only by push. Write it to the device registry.
         dr.async_get(hass).async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, devid)}, sw_version=fw_ver)
 
     def set_push_state(connected):

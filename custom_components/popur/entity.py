@@ -16,7 +16,6 @@ class PopurEntity(CoordinatorEntity):
             "name": device["name"],
             "manufacturer": "Popur",
             "model": "X5",
-            "sw_version": "1.0",
         }
 
     @property

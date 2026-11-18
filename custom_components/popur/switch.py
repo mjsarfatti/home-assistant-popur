@@ -39,7 +39,7 @@ class PopurManualSwitch(PopurEntity, SwitchEntity):
             await self.hass.async_add_executor_job(self.coordinator.api.send_command, self._device_id, "manual_mode", value)
         except PopurCommandError as err:
             raise HomeAssistantError(str(err)) from err
-        await self.coordinator.async_request_refresh()
+        # No coordinator refresh: the device confirms the new value by push.
 
 class PopurSettingSwitch(PopurEntity, SwitchEntity):
     def __init__(self, coordinator, device, key, pid, name, icon):
